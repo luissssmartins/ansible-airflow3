@@ -1,0 +1,60 @@
+zabbix_export:
+  version: '7.0'
+  template_groups:
+    - uuid: 8c191595678b4941bd667c646f2676ea
+      name: Templates/Applications
+  templates:
+    - uuid: 806e92023cd24c50aed5e808f70b70fe
+      template: Airflow
+      name: Airflow
+      groups:
+        - name: Templates/Applications
+      discovery_rules:
+        - uuid: c25fd7a2d1134fbd9e9028b0b301cdad
+          name: DAGs do Airflow
+          type: TRAP
+          key: airflow.dag.discovery
+          lifetime: 30d
+          enabled_lifetime_type: DISABLE_NEVER
+          item_prototypes:
+            - uuid: 0c7d08e2cc814c10aedc726d3cb8c9dd
+              name: 'DAG {#DAG_ID}: status'
+              type: TRAP
+              key: 'airflow.dagrun.status[{#DAG_ID}]'
+              valuemap:
+                name: Airflow status
+              tags:
+                - tag: dag
+                  value: '{#DAG_ID}'
+              trigger_prototypes:
+                - uuid: ba93f0a403ec4eec9be4f1952f3247cd
+                  expression: 'last(/Airflow/airflow.dagrun.status[{#DAG_ID}])=0'
+                  name: 'Airflow: DAG {#DAG_ID} falhou'
+                  priority: HIGH
+                  manual_close: 'YES'
+            - uuid: 4a31418fafc54762acbc7d12b3672712
+              name: 'DAG {#DAG_ID}: duração'
+              type: TRAP
+              key: 'airflow.dagrun.duration[{#DAG_ID}]'
+              value_type: FLOAT
+              units: s
+              tags:
+                - tag: dag
+                  value: '{#DAG_ID}'
+            - uuid: 00401d2f27ca4bbeab068148db90b9e6
+              name: 'DAG {#DAG_ID}: última falha de task'
+              type: TRAP
+              key: 'airflow.task.failed[{#DAG_ID}]'
+              value_type: TEXT
+              trends: '0'
+              tags:
+                - tag: dag
+                  value: '{#DAG_ID}'
+      valuemaps:
+        - uuid: 3ffec836b87f442e9114a7187a9cecb4
+          name: Airflow status
+          mappings:
+            - value: '0'
+              newvalue: Falha
+            - value: '1'
+              newvalue: Sucesso
