@@ -1,0 +1,8 @@
+[project]
+name = "airflow-dags"
+version = "0.1.1"
+requires-python = ">=3.10,<3.15"
+
+[tool.pytest.ini_options]
+pythonpath = ["dags"]
+testpaths = ["tests"]

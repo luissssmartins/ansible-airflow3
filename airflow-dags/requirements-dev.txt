@@ -1,0 +1,3 @@
+--constraint https://raw.githubusercontent.com/apache/airflow/constraints-3.3.2/constraints-3.12.txt
+apache-airflow[postgres,fab]==3.3.2
+pytest
