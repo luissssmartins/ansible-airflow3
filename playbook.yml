@@ -1,0 +1,180 @@
+- name: Airflow
+  hosts: airflow
+  vars:
+    airflow_version: latest
+    airflow_user: airflow
+    airflow_home: /opt/airflow
+    airflow_venv: "{{ airflow_home }}/venv"
+    airflow_port: 8080
+    airflow_load_examples: "False"
+    airflow_components:
+      - api-server
+      - scheduler
+      - dag-processor
+      - triggerer
+    airflow_db_name: airflow
+    airflow_db_user: airflow
+    airflow_db_password: "{{ lookup('ansible.builtin.password', 'credentials/' ~ inventory_hostname ~ '/db_password length=32 chars=ascii_letters,digits') }}"
+    airflow_secret_key: "{{ lookup('ansible.builtin.password', 'credentials/' ~ inventory_hostname ~ '/secret_key length=64 chars=ascii_letters,digits') }}"
+    airflow_jwt_secret: "{{ lookup('ansible.builtin.password', 'credentials/' ~ inventory_hostname ~ '/jwt_secret length=64 chars=ascii_letters,digits') }}"
+    airflow_users:
+      - username: admin
+        password: admin
+        firstname: Admin
+        lastname: Airflow
+        email: admin@example.com
+        role: Admin
+    airflow_env:
+      AIRFLOW_HOME: "{{ airflow_home }}"
+
+  tasks:
+    - name: Base pacotes
+      ansible.builtin.apt:
+        name:
+          - acl
+          - python3
+          - python3-venv
+          - python3-pip
+          - python3-psycopg2
+          - postgresql
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Download Airflow
+      ansible.builtin.uri:
+        url: https://pypi.org/pypi/apache-airflow/json
+        return_content: true
+      register: airflow_pypi
+      when: airflow_version == "latest"
+
+    - name: Versão do Airflow
+      ansible.builtin.set_fact:
+        airflow_resolved_version: "{{ airflow_pypi.json.info.version if airflow_version == 'latest' else airflow_version }}"
+        airflow_python_version: "{{ ansible_facts.python.version.major }}.{{ ansible_facts.python.version.minor }}"
+
+    - name: PostgreSQL 
+      ansible.builtin.service:
+        name: postgresql
+        state: started
+        enabled: true
+
+    - name: Criar usuário
+      community.postgresql.postgresql_user:
+        name: "{{ airflow_db_user }}"
+        password: "{{ airflow_db_password }}"
+      become_user: postgres
+      no_log: true
+
+    - name: Criar banco de dados
+      community.postgresql.postgresql_db:
+        name: "{{ airflow_db_name }}"
+        owner: "{{ airflow_db_user }}"
+        encoding: UTF8
+      become_user: postgres
+
+    - name: Criar usuário do sistema
+      ansible.builtin.user:
+        name: "{{ airflow_user }}"
+        home: "{{ airflow_home }}"
+        shell: /bin/bash
+        system: true
+
+    - name: Criar diretórios
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ airflow_user }}"
+        group: "{{ airflow_user }}"
+        mode: "0755"
+      loop:
+        - "{{ airflow_home }}"
+        - "{{ airflow_home }}/dags"
+        - "{{ airflow_home }}/logs"
+        - "{{ airflow_home }}/plugins"
+
+    - name: Instalar Airflow {{ airflow_resolved_version }}
+      ansible.builtin.pip:
+        name:
+          - "apache-airflow[postgres,fab]=={{ airflow_resolved_version }}"
+        virtualenv: "{{ airflow_venv }}"
+        virtualenv_command: python3 -m venv
+        extra_args: "--constraint https://raw.githubusercontent.com/apache/airflow/constraints-{{ airflow_resolved_version }}/constraints-{{ airflow_python_version }}.txt"
+      become_user: "{{ airflow_user }}"
+      notify: Reiniciar Airflow
+
+    - name: Configurar airflow.cfg
+      ansible.builtin.template:
+        src: airflow.cfg.j2
+        dest: "{{ airflow_home }}/airflow.cfg"
+        owner: "{{ airflow_user }}"
+        group: "{{ airflow_user }}"
+        mode: "0600"
+      notify: Reiniciar Airflow
+
+    - name: Rodar migrations
+      ansible.builtin.command: "{{ airflow_venv }}/bin/airflow db migrate"
+      environment: "{{ airflow_env }}"
+      become_user: "{{ airflow_user }}"
+      register: airflow_db_migrate
+      changed_when: "'Running upgrade' in airflow_db_migrate.stdout + airflow_db_migrate.stderr"
+
+    - name: Criar usuários
+      ansible.builtin.command:
+        argv:
+          - "{{ airflow_venv }}/bin/airflow"
+          - users
+          - create
+          - --username
+          - "{{ item.username }}"
+          - --password
+          - "{{ item.password }}"
+          - --firstname
+          - "{{ item.firstname }}"
+          - --lastname
+          - "{{ item.lastname }}"
+          - --email
+          - "{{ item.email }}"
+          - --role
+          - "{{ item.role }}"
+      environment: "{{ airflow_env }}"
+      become_user: "{{ airflow_user }}"
+      loop: "{{ airflow_users }}"
+      loop_control:
+        label: "{{ item.username }}"
+      register: airflow_users_create
+      changed_when: "'already exist' not in airflow_users_create.stdout"
+      no_log: true
+
+    - name: Criar serviços systemd
+      ansible.builtin.template:
+        src: airflow.service.j2
+        dest: "/etc/systemd/system/airflow-{{ item }}.service"
+        mode: "0644"
+      loop: "{{ airflow_components }}"
+      notify: Reiniciar Airflow
+
+    - name: Habilitar e iniciar serviços
+      ansible.builtin.systemd_service:
+        name: "airflow-{{ item }}"
+        state: started
+        enabled: true
+        daemon_reload: true
+      loop: "{{ airflow_components }}"
+
+  handlers:
+    - name: Reiniciar Airflow
+      ansible.builtin.systemd_service:
+        name: "airflow-{{ item }}"
+        state: restarted
+        daemon_reload: true
+      loop: "{{ airflow_components }}"
+
+  post_tasks:
+    - name: Validar health do Airflow
+      ansible.builtin.uri:
+        url: "http://localhost:{{ airflow_port }}/api/v2/monitor/health"
+      register: airflow_health
+      until: airflow_health.status == 200
+      retries: 30
+      delay: 5

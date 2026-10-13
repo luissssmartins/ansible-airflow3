@@ -1,0 +1,16 @@
+[Unit]
+Description=Airflow {{ item }}
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+User={{ airflow_user }}
+Group={{ airflow_user }}
+Environment=AIRFLOW_HOME={{ airflow_home }}
+WorkingDirectory={{ airflow_home }}
+ExecStart={{ airflow_venv }}/bin/airflow {{ item }}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
