@@ -5,7 +5,7 @@
     airflow_user: airflow
     airflow_home: /opt/airflow
     airflow_venv: "{{ airflow_home }}/venv"
-    airflow_port: 8080
+    airflow_port: 8000
     airflow_load_examples: "False"
     airflow_components:
       - api-server
